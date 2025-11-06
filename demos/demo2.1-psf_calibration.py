@@ -34,7 +34,9 @@ def beads_stack_calibrate():
                        'pixel_size_xy': (108, 108),
                        'otf_rescale_xy': (0.5, 0.5),  # this is an empirical value, which maybe due to the pixelation
                        'npupil': 64,
-                       'psf_size': 31}
+                       'psf_size': 31,
+                       'focus_norm': True,
+                       }
 
     # set camera parameters
     camera_params_dict = {'camera_type': 'scmos',

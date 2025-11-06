@@ -186,7 +186,7 @@ def get_gain_bg_empirical(images,
                           camera_params_dict,
                           adjust_gain=True,
                           percentile=50,
-                          plot=False):
+                          plot_show=True):
     """
     This is an empirical method to estimate gain and training background range from data with uneven background,
     use the 1% darkest pixels to estimate the variance/mean ratio as the gain, and adjust the e_per_adu to make the
@@ -203,241 +203,322 @@ def get_gain_bg_empirical(images,
             Sets the percentage of pixels that are assumed to have signals,
             and the training background range is estimated from these pixels,
             the background estimated from the rest is often lower and may cause false positives.
-        plot (bool): If true produces a plot of the histogram and fit
+        plot_show (bool): If true produces a plot of the histogram and fit
 
     Returns:
-        (float, float): (bg_min, bg_max) background parameters
+        (float, float, any): (bg_min, bg_max) background parameters
     """
     n, h, w = images.shape
+    batch_size = 1000  # A good default for many systems, adjust if needed
 
     camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
-    images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
+
+    # --- Step 1: Calculate Mean Image and Pixel Mask in Chunks ---
+    # This is a critical step to avoid loading the full dataset at once.
+    # We will compute the mean image incrementally.
+    mean_image_photon = np.zeros((h, w), dtype=np.float32)
+
+    # Process images in batches to compute the mean image
+    num_batches = (n + batch_size - 1) // batch_size
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, n)
+        batch = images[start_idx:end_idx]
+
+        batch_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(batch.astype(np.float32))))
+        mean_image_photon += batch_photon.mean(axis=0) * (batch.shape[0] / n)
+
+    # --- Step 2: Adjust Gain (if required) ---
+    e_per_adu_new = camera_calib.e_per_adu
 
     if adjust_gain:
-        # get the minimal 0.5% pixels as the background to estimate the gain
-        min_idx = np.where(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.005))
+        print('Estimating gain...')
 
-        # split the images into 1000 frames as time chunks
-        if n >= 1000:
-            images_electron = camera_calib.qe * (images_photon.reshape(-1, 1000, h, w) if (n % 1000 == 0)
-                                                 else (images_photon[:-(n % 1000)].reshape(-1, 1000, h, w)))
-        else:
-            images_electron = camera_calib.qe * images_photon.reshape(1, -1, h, w)
+        # Get the pixel indices for gain estimation
+        min_idx = np.where(mean_image_photon < np.quantile(mean_image_photon, 0.005))
 
-        pix_vals = images_electron[:, :, min_idx[0], min_idx[1]]
+        pix_mean_list = []
+        pix_var_list = []
 
-        pix_mean = pix_vals.mean(1).reshape(-1)
-        pix_var = pix_vals.var(1).reshape(-1)
-        pix_gain = ((pix_var-camera_calib.read_noise_sigma**2)/pix_mean)
-        # remove the outliers, 95% remain
+        # Iterate over batches again to calculate statistics
+        for i in range(num_batches):
+            start_idx = i * batch_size
+            end_idx = min(start_idx + batch_size, n)
+            batch = images[start_idx:end_idx]
+
+            # Convert to photons and electrons for this batch only
+            batch_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(batch.astype(np.float32))))
+            batch_electron = camera_calib.qe * batch_photon
+
+            # Collect pixel values for gain estimation
+            pix_vals = batch_electron[:, min_idx[0], min_idx[1]]
+            pix_mean_list.append(pix_vals.mean(axis=0))
+            pix_var_list.append(pix_vals.var(axis=0))
+
+        pix_mean = np.concatenate(pix_mean_list)
+        pix_var = np.concatenate(pix_var_list)
+        pix_gain = ((pix_var - camera_calib.read_noise_sigma ** 2) / pix_mean)
+
         used_idx = np.logical_and(pix_gain > pix_gain.mean() - 2 * pix_gain.std(),
                                   pix_gain < pix_gain.mean() + 2 * pix_gain.std())
-        pix_mean_used = pix_mean[used_idx]
-        pix_var_used = pix_var[used_idx]
-        pix_gain_used = pix_gain[used_idx]
-        est_gain = pix_gain_used.mean()
+        est_gain = pix_gain[used_idx].mean()
 
         print(f'The variance/mean ratio of data is estimated as {est_gain:.2f} using the provided QE and e_per_adu.')
 
         if est_gain > 1.1 or est_gain < 0.9:
+            pix_mean_used = pix_mean[used_idx]
+            pix_var_used = pix_var[used_idx]
             e_per_adu_new = ((pix_mean_used.mean() +
-                             np.sqrt(pix_mean_used.mean()**2-4*pix_var_used.mean()*
-                                     (est_gain*pix_mean_used.mean()-pix_var_used.mean())))/(2*pix_var_used.mean())
-                             *camera_calib.e_per_adu)
-            # e_per_adu_new = camera_calib.e_per_adu / est_gain
+                              np.sqrt(pix_mean_used.mean() ** 2 - 4 * pix_var_used.mean() *
+                                      (est_gain * pix_mean_used.mean() - pix_var_used.mean()))) / (
+                                         2 * pix_var_used.mean())
+                             * camera_calib.e_per_adu)
             e_per_adu_new = np.around(e_per_adu_new, decimals=2)
-            print(f'This might be unreliable, '
-                  f'automatically change the e_per_adu from {camera_calib.e_per_adu:.2f} to '
-                  f'{e_per_adu_new:.2f} to make the variance/mean ratio 1.0 for Poisson noise assumption.')
+            print(
+                f'This might be unreliable, automatically change the e_per_adu from {camera_calib.e_per_adu:.2f} to {e_per_adu_new:.2f} to make the variance/mean ratio 1.0 for Poisson noise assumption.')
+            mean_image_photon *= (e_per_adu_new / camera_calib.e_per_adu)
             camera_calib.e_per_adu = e_per_adu_new
-            images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
-        else:
-            e_per_adu_new = camera_calib.e_per_adu
-    else:
-        e_per_adu_new = camera_calib.e_per_adu
 
-    # get the region of interest that has both background and signals
-    sample_mask = np.where(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
-    if n >= 1000:
-        # average the images for every 1000 frames
-        images_avg = images_photon.reshape(-1, 1000, h, w).mean(1) if (n % 1000 == 0) \
-            else images_photon[:-(n % 1000)].reshape(-1, 1000, h, w).mean(1)
-    else:
-        images_avg = images_photon.reshape(1, -1, h, w).mean(1)
+    # --- Step 3: Get Background Range ---
+    # Apply the updated calibration and process in batches again
+    sample_mask = np.where(mean_image_photon > np.percentile(mean_image_photon, percentile))
 
-    # pixel values containing both bg and signals
-    pixel_vals = images_avg[:, sample_mask[0], sample_mask[1]].reshape(-1)
+    pixel_vals_list = []
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, n)
+        batch = images[start_idx:end_idx]
 
-    # fit the gauss distribution
+        # Apply the updated calibration to the current batch
+        batch_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(batch.astype(np.float32))))
+
+        # Average the batch and get pixel values for fitting
+        batch_avg = batch_photon.mean(axis=0)
+        pixel_vals_list.append(batch_avg[sample_mask[0], sample_mask[1]])
+
+    pixel_vals = np.concatenate(pixel_vals_list)
+
+    # Fit the Gauss distribution
     result = scipy.stats.norm.fit(pixel_vals)
-
-    # get the background range, the lower bound is the mean minus 2 times std, the upper bound is the mean
-    bg_range = tuple(np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
-                             a_min=0, a_max=None))
+    bg_range = tuple(float(x) for x in np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
+                                               a_min=0, a_max=None))
     print(f'Estimated bg_range: {bg_range}')
 
-    if plot:
-        # Create the figure and GridSpec
-        fig = plt.figure(figsize=(12, 8), constrained_layout=True, dpi=300)
-        gs = fig.add_gridspec(2, 3)
+    # --- Step 4: Plotting (if required) ---
+    fig = plt.figure(figsize=(12, 8), constrained_layout=True, dpi=300)
+    # fig = plt.figure()
+    gs = fig.add_gridspec(2, 3)
 
-        if adjust_gain:
-            # First plot: Histogram with star marker
-            ax0 = fig.add_subplot(gs[0, 0])
-            ax0.imshow(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.001))
-            ax0.set_xlabel('Pixels')
-            ax0.set_ylabel('Pixels')
-            ax0.set_title('Pixels used to estimate gain(var/mean)')
+    if adjust_gain:
+        ax0 = fig.add_subplot(gs[0, 0])
+        ax0.imshow(mean_image_photon < np.quantile(mean_image_photon, 0.001))
+        ax0.set_xlabel('Pixels')
+        ax0.set_ylabel('Pixels')
+        ax0.set_title('Pixels used to estimate gain(var/mean)')
 
-            ax1 = fig.add_subplot(gs[0, 1])
-            ax1.hist(pix_gain_used,
-                     bins=np.linspace(pix_gain_used.min(), pix_gain_used.max(), 50),
-                     alpha=0.5,
-                     label='0.5% pixels var/mean')
-            ax1.plot(est_gain, 1, '*', markersize=20, label=f'Estimated gain: {est_gain:.1f}')
-            ax1.legend()
-            ax1.set_xlabel('Variance/mean ratio')
-            ax1.set_ylabel('Counts')
-
-        # Second plot: Mean image
-        ax2 = fig.add_subplot(gs[1, 0])
-        plt.colorbar(mappable=ax2.imshow(images_photon.mean(0), cmap='turbo'),
-                     ax=ax2, fraction=0.046, pad=0.04)
-        ax2.set_title('Mean image')
-        ax2.set_xlabel('Pixels')
-        ax2.set_ylabel('Pixels')
-
-        # Third plot: Masked area
-        ax3 = fig.add_subplot(gs[1, 1])
-        ax3.imshow(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
-        ax3.set_title(f'Masked area for BG fit \n(mean image>{percentile}%)')
-        ax3.set_xlabel('Pixels')
-        ax3.set_ylabel('Pixels')
-
-        # Fourth plot: Dual histogram
-        ax4 = fig.add_subplot(gs[1, 2])
-        ax4.hist(pixel_vals,
-                 density=True,
-                 bins=20,
+        ax1 = fig.add_subplot(gs[0, 1])
+        ax1.hist(pix_gain[used_idx],
+                 bins=np.linspace(pix_gain[used_idx].min(), pix_gain[used_idx].max(), 50),
                  alpha=0.5,
-                 label='Masked pixels (BG + signals)')
-        ax4.hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
-                 density=True,
-                 bins=20,
-                 alpha=0.5,
-                 label=f'Training BG range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
-        ax4.legend()
-        ax4.set_xlabel('Pixel value (photons)')
-        ax4.set_ylabel('Normalized counts')
-
+                 label='0.5% pixels var/mean')
+        ax1.plot(est_gain, 1, '*', markersize=20, label=f'Estimated gain: {est_gain:.1f}')
+        ax1.legend()
+        ax1.set_xlabel('Variance/mean ratio')
+        ax1.set_ylabel('Counts')
+    ax2 = fig.add_subplot(gs[1, 0])
+    plt.colorbar(mappable=ax2.imshow(mean_image_photon, cmap='turbo'), ax=ax2, fraction=0.046, pad=0.04)
+    ax2.set_title('Mean image')
+    ax2.set_xlabel('Pixels')
+    ax2.set_ylabel('Pixels')
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax3.imshow(mean_image_photon > np.percentile(mean_image_photon, percentile))
+    ax3.set_title(f'Masked area for BG fit \n(mean image>{percentile}%)')
+    ax3.set_xlabel('Pixels')
+    ax3.set_ylabel('Pixels')
+    ax4 = fig.add_subplot(gs[1, 2])
+    ax4.hist(pixel_vals,
+             density=True,
+             bins=20,
+             alpha=0.5,
+             label='Masked pixels (BG + signals)')
+    ax4.hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
+             density=True,
+             bins=20,
+             alpha=0.5,
+             label=f'Training BG range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
+    ax4.legend()
+    ax4.set_xlabel('Pixel value (photons)')
+    ax4.set_ylabel('Normalized counts')
+    if plot_show:
         plt.show()
+        fig_dict = None
+    else:
+        fig_dict = {'figure': fig, 'title': 'Estimated bg_range'}
 
-    return bg_range, e_per_adu_new
+    return bg_range, e_per_adu_new, fig_dict
 
 
-def get_photon_range(images, camera_params_dict, psf_size, sampler_params_dict, plot=False):
+def get_photon_range(images, camera_params_dict, psf_size, sampler_params_dict, plot_show=True):
     """
-    Estimate the training photon range from the experimental data.
+    Estimate the training photon range from experimental data with reduced memory usage
+    and improved speed using a moving average for background subtraction.
     """
     print('-' * 200)
     print('Estimating photon range from cropped molecules, '
           'this might be overestimated for high density, '
           'please visually check training data to avoid large mismatch')
 
+    # --- Initialization ---
     camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
-    images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
+    num_images, img_height, img_width = images.shape
 
-    # prepare the parameters for ROI extraction
-    img_height, img_width = images_photon.shape[-2:]
-    # set the sparse roi size, make sure the roi size is not larger than the image size
-    sparse_roi_size = psf_size
-    assert sparse_roi_size <= min(img_height, img_width), \
-        f"sparse roi size larger than the image size! Please check the PSF size and image size."
-    (sparse_rois,
-     sparse_rois_yxt,) = ailoc.common.get_sparse_rois(images_photon,
-                                                      sparse_roi_size,
-                                                      sampler_params_dict,
-                                                      20000)
+    assert psf_size <= min(img_height, img_width), \
+        f"PSF size ({psf_size}) is larger than the image size! Please check parameters."
 
+    # --- Parameters for Peak Finding and ROI Extraction ---
+    max_roi_num = 20000
+    dof_range = (sampler_params_dict['z_range'][1] - sampler_params_dict['z_range'][0]) / 1000
+    dog_sigma = max(2, int(dof_range * 2))
+    find_max_kernel = dog_sigma + 1
+    edge_dist = psf_size // 2
+    window_size = 50  # For local temporal background estimation
+
+    # --- Pre-allocate array for ROIs in digital units ---
+    sparse_rois_digital = np.zeros((max_roi_num, psf_size, psf_size), dtype=np.float32)
+    roi_count = 0
+
+    print(f'Using psf_size: {psf_size}, dog_sigma: {dog_sigma}, find_max_kernel: {find_max_kernel}')
+
+    # 1. Initialize the sum and window size for the first frame's window
+    start_idx = 0
+    end_idx = min(window_size + 1, num_images)
+    # Use a high-precision float for the sum to avoid overflow/precision issues
+    current_sum = np.sum(images[start_idx:end_idx], axis=0, dtype=np.float64)
+    current_window_len = end_idx - start_idx
+
+    for frame_idx, image_digital in enumerate(images):
+        # 2. Update the moving sum efficiently for subsequent frames
+        if frame_idx > 0:
+            # Subtract the frame that just left the window's trailing edge
+            frame_to_remove_idx = frame_idx - window_size - 1
+            if frame_to_remove_idx >= 0:
+                current_sum -= images[frame_to_remove_idx]
+                current_window_len -= 1
+
+            # Add the frame that just entered the window's leading edge
+            frame_to_add_idx = frame_idx + window_size
+            if frame_to_add_idx < num_images:
+                current_sum += images[frame_to_add_idx]
+                current_window_len += 1
+
+        # 3. Calculate the local mean from the running sum
+        local_mean_digital = current_sum / current_window_len
+        image_nobg_digital = np.clip(image_digital - local_mean_digital, 0, None)
+
+        # 4. Find and filter peaks (this part remains the same)
+        peaks = ailoc.common.extract_smlm_peaks(
+            image_nobg=image_nobg_digital,
+            dog_sigma=(dog_sigma, dog_sigma),
+            find_max_thre=0.3,
+            find_max_kernel=(find_max_kernel, find_max_kernel),
+        )
+
+        if len(peaks) > 0:
+            peaks = ailoc.common.remove_border_peaks(peaks, edge_dist + 1, image_nobg_digital.shape)
+
+        if len(peaks) > 0:
+            tmp_sparse_peaks, _ = ailoc.common.remove_close_peaks(peaks, np.hypot(psf_size, psf_size))
+
+            # 5. Extract ROIs and fill the pre-allocated array
+            for peak in tmp_sparse_peaks:
+                if roi_count >= max_roi_num:
+                    break
+                start_row, start_col = peak[0] - edge_dist, peak[1] - edge_dist
+                roi_tmp = image_nobg_digital[start_row : start_row + psf_size, start_col : start_col + psf_size]
+                sparse_rois_digital[roi_count] = roi_tmp
+                roi_count += 1
+
+        if roi_count >= max_roi_num:
+            print(f"\nReached max ROI count ({max_roi_num}) at frame {frame_idx}.")
+            break
+
+    # --- Post-Loop Processing ---
+    if roi_count == 0:
+        raise ValueError("No sparse ROIs were found. Check peak finding parameters or image data.")
+    sparse_rois_digital = sparse_rois_digital[:roi_count]
+    print(f'Found {roi_count} ROIs. Converting to photon counts...')
+
+    rois_tensor = torch.from_numpy(sparse_rois_digital.astype(np.float32))
+    sparse_rois = ailoc.common.cpu(camera_calib.backward(rois_tensor + camera_calib.baseline))
+
+    # --- Distribution Fitting (Unchanged) ---
     sum_vals = np.squeeze(sparse_rois.sum(axis=(-1, -2)))
-
-    # limit the photon range to be within a reasonable range
     photon_range_limit = (100, 300000)
 
-    # Fit an exponential distribution
     loc_exp, scale_exp = scipy.stats.expon.fit(sum_vals)
-    # Get KS statistic for exponential fit
-    ks_stat_exp, _ = scipy.stats.kstest(sum_vals, 'expon', args=(loc_exp, scale_exp))
-
-    # Fit a Gaussian (normal) distribution
     mu_gauss, std_gauss = scipy.stats.norm.fit(sum_vals)
-    # Get KS statistic for Gaussian fit
-    ks_stat_gauss, _ = scipy.stats.kstest(sum_vals, 'norm', args=(mu_gauss, std_gauss))
-
-    # Fit a Gamma distribution
     a_gamma, loc_gamma, scale_gamma = scipy.stats.gamma.fit(sum_vals)
+
+    ks_stat_exp, _ = scipy.stats.kstest(sum_vals, 'expon', args=(loc_exp, scale_exp))
+    ks_stat_gauss, _ = scipy.stats.kstest(sum_vals, 'norm', args=(mu_gauss, std_gauss))
     ks_stat_gamma, _ = scipy.stats.kstest(sum_vals, 'gamma', args=(a_gamma, loc_gamma, scale_gamma))
 
-    # Find the best fit based on the minimum KS statistic
-    best_fit = np.argmin([ks_stat_exp, ks_stat_gauss, ks_stat_gamma])
+    fits = {'exp': ks_stat_exp, 'gauss': ks_stat_gauss, 'gamma': ks_stat_gamma}
+    best_fit_name = min(fits, key=fits.get)
 
-    # Determine the best fit based on the smaller KS statistic
-    if best_fit == 0:
-        # print("💡 Exponential distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_exp))
-        # Set the photon range using the exponential fit parameters
+    if best_fit_name == 'exp':
         photon_range_max = min(loc_exp + 2 * scale_exp, photon_range_limit[1])
-    elif best_fit == 1:
-        # print("💡 Gaussian distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_gauss))
-        # Set the photon range using the Gaussian fit parameters (e.g., mean +/- 3 std)
+    elif best_fit_name == 'gauss':
         photon_range_max = min(mu_gauss + 2 * std_gauss, photon_range_limit[1])
-    else:
-        # print("💡 Gamma distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_gamma))
-        # Set the photon range using the Gamma fit parameters (e.g., 99th percentile)
-        photon_range_max = min(scipy.stats.gamma.ppf(0.95, a_gamma, loc=loc_gamma, scale=scale_gamma),
-                               photon_range_limit[1])
+    else:  # gamma
+        photon_range_max = min(scipy.stats.gamma.ppf(0.95, a_gamma, loc=loc_gamma, scale=scale_gamma), photon_range_limit[1])
 
     photon_range_min = max(photon_range_max / 20, photon_range_limit[0])
-    photon_range_new = (photon_range_min, photon_range_max)
-
+    photon_range_new = (float(photon_range_min), float(photon_range_max))
     print(f'Estimated photon_range: {photon_range_new}')
 
-    if plot:
-        # Create the figure and GridSpec
-        fig = plt.figure(figsize=(12, 6),  dpi=300)
-        gs = fig.add_gridspec(1, 2)
+    # --- Plotting ---
+    # Create the figure and GridSpec
+    fig = plt.figure(figsize=(12, 6), dpi=300, constrained_layout=True)
+    # fig = plt.figure()
+    gs = fig.add_gridspec(1, 2)
 
-        # plot example ROIs
-        example_indices = random.sample(range(sparse_rois.shape[0]),
-                                        min(25, sparse_rois.shape[0]))
-        example_rois = sparse_rois[example_indices]
-        gs00 = gs[0, 0].subgridspec(len(example_rois) // 5, 5)
-        for i in range(len(example_rois) // 5):
-            for j in range(5):
-                ax = fig.add_subplot(gs00[i, j])
-                ax.imshow(example_rois[i * 5 + j], cmap='turbo')
-                ax.axis('off')
-        # set the title
-        fig.suptitle('Example ROIs', x=0.3, y=0.95)
+    # plot example ROIs
+    example_indices = random.sample(range(sparse_rois.shape[0]),
+                                    min(25, sparse_rois.shape[0]))
+    example_rois = sparse_rois[example_indices]
+    gs00 = gs[0, 0].subgridspec(len(example_rois) // 5, 5)
+    for i in range(len(example_rois) // 5):
+        for j in range(5):
+            ax = fig.add_subplot(gs00[i, j])
+            ax.imshow(example_rois[i * 5 + j], cmap='turbo')
+            ax.axis('off')
+    # set the title
+    fig.suptitle('Example ROIs', x=0.3, y=0.95)
 
-        # plot histogram of ROI photons
-        ax1 = fig.add_subplot(gs[0, 1])
-        ax1.hist(sum_vals,
-                 bins=np.linspace(sum_vals.min(), sum_vals.max(), 50),
-                 density=True,
-                 alpha=0.5,
-                 label='Summed ROI photon distribution')
-        # plot photon range on it
-        ax1.axvline(photon_range_new[0], color='r', linestyle='--',
-                    label=f'Training photon range ({photon_range_new[0]:.1f}, {photon_range_new[1]:.1f})')
-        ax1.axvline(photon_range_new[1], color='r', linestyle='--')
+    # plot histogram of ROI photons
+    ax1 = fig.add_subplot(gs[0, 1])
+    ax1.hist(sum_vals,
+             bins=np.linspace(sum_vals.min(), sum_vals.max(), 50),
+             density=True,
+             alpha=0.5,
+             label='Summed ROI photon distribution')
+    # plot photon range on it
+    ax1.axvline(photon_range_new[0], color='r', linestyle='--',
+                label=f'Training photon range ({photon_range_new[0]:.1f}, {photon_range_new[1]:.1f})')
+    ax1.axvline(photon_range_new[1], color='r', linestyle='--')
 
-        ax1.set_xlabel('Summed ROI photons')
-        ax1.set_ylabel('Normalized counts')
+    ax1.set_xlabel('Summed ROI photons')
+    ax1.set_ylabel('Normalized counts')
 
-        plt.legend()
+    plt.legend()
+    if plot_show:
         plt.show()
+        fig_dict = None
+    else:
+        fig_dict = {'figure': fig, 'title': 'Estimated photon'}
 
-    return photon_range_new
+    return photon_range_new, fig_dict
 
 
 def get_mean_percentile(images, percentile=10):

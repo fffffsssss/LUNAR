@@ -30,10 +30,9 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
         self.scale_ph_offset = np.mean(self.dict_sampler_params['bg_range'])
         self.scale_ph_factor = self.dict_sampler_params['photon_range'][1]/50
 
-        try:
-            self.temporal_attn = self.dict_sampler_params['temporal_attn']
-        except KeyError:
-            self.temporal_attn = False
+        self.temporal_attn = (self.dict_sampler_params.get('temporal_attn', False) or self.dict_sampler_params.get(
+            'local_context', False))
+        self.local_context = self.temporal_attn  # for possible use in somewhere
         # should be odd, using the same number of frames before and after the target frame
         self.attn_length = attn_length
         assert self.attn_length % 2 == 1, 'attn_length should be odd'

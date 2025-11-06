@@ -48,7 +48,7 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
 
         local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
         temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
-        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
 
         # if using local context or temporal attention, the rolling inference strategy will be
         # automatically applied in the network.forward()
@@ -572,7 +572,7 @@ class SmlmDataAnalyzer:
 
         local_context = getattr(self.loc_model, 'local_context', False)  # for DeepLoc model
         temporal_attn = getattr(self.loc_model, 'temporal_attn', False)  # for TransLoc model
-        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
 
         if local_context:
             extra_length = 1

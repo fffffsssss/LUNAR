@@ -277,7 +277,7 @@ class TestDataSimulator:
             pixel_size_xy=self.dict_psf_params['pixel_size_xy'],
         )
 
-        self.psf_model = ailoc.simulation.VectorPSFTorch(self.dict_psf_params)
+        self.psf_model = ailoc.simulation.VectorPSFTorch(self.dict_psf_params, data_type=torch.float32)
 
         self.camera = ailoc.simulation.instantiate_camera(self.dict_camera_params)
 
@@ -453,10 +453,10 @@ class TestDataSimulator:
         Check the PSF.
         """
         print('checking pupil')
-        pupil_phase = ailoc.common.cpu(2 * np.pi *
+        pupil_phase = ailoc.common.cpu(torch.real(2 * np.pi *
                                        torch.sum(self.psf_model.zernike_coef[:, None, None] *
                                                  self.psf_model.allzernikes, dim=0) /
-                                       self.psf_model.wavelength)
+                                       self.psf_model.wavelength))
         plt.figure(constrained_layout=True, dpi=300)
         plt.imshow(
             pupil_phase, cmap='turbo',

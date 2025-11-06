@@ -443,7 +443,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         self.zernike_idx_learn = zernike_idx_learn
         self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict,
                                                            req_grad=True,
-                                                           data_type=torch.float64,
+                                                           data_type=torch.float32,
                                                            zernike_idx_learn=self.zernike_idx_learn)
 
         self.warmup = 5000

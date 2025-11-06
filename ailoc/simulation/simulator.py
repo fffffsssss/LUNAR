@@ -21,7 +21,7 @@ class Simulator:
         """
 
         # self.psf_model = ailoc.simulation.VectorPSFCUDA(psf_params)
-        self.psf_model = ailoc.simulation.VectorPSFTorch(psf_params)
+        self.psf_model = ailoc.simulation.VectorPSFTorch(psf_params, data_type=torch.float32)
         if camera_params['camera_type'].upper() == 'EMCCD':
             self.camera = ailoc.simulation.EMCCD(camera_params)
             self.mol_sampler = ailoc.simulation.MoleculeSampler(sampler_params,

@@ -10,7 +10,6 @@ import tifffile
 import natsort
 import pathlib
 import csv
-import perlin_numpy
 import matplotlib.pyplot as plt
 
 import ailoc.common
@@ -344,7 +343,7 @@ class TestDataSimulator:
         """add background"""
         if self.bg_perlin:
             res = np.clip(image_size//64, a_min=1, a_max=None)
-            perlin_noise = perlin_numpy.generate_perlin_noise_2d((image_size, image_size), (res, res))
+            perlin_noise = ailoc.simulation.generate_perlin_noise_2d((image_size, image_size), (res, res))
             perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))
             bg = perlin_noise * (self.bg_range[1] - self.bg_range[0]) + self.bg_range[0]
         else:

@@ -1044,7 +1044,7 @@ class WorkerShmQueue:
         # for rolling inference strategy
         local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
         temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
-        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
         # if using local context or temporal attention, the rolling inference strategy will be
         # automatically applied in the network.forward()
         rolling_inference = True if local_context or temporal_attn else False
@@ -1481,7 +1481,7 @@ class CompetitiveSmlmDataAnalyzer:
         # for rolling inference strategy
         local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
         temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
-        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
         # if using local context or temporal attention, the rolling inference strategy will be
         # automatically applied in the network.forward()
         rolling_inference = True if local_context or temporal_attn else False
@@ -1746,7 +1746,7 @@ class CompetitiveSmlmDataAnalyzer:
 
         local_context = getattr(self.loc_model, 'local_context', False)  # for DeepLoc model
         temporal_attn = getattr(self.loc_model, 'temporal_attn', False)  # for TransLoc model
-        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
 
         # need to put the loc_model to the GPU, like the consumer func does
         torch.cuda.set_device('cuda:0')

@@ -282,7 +282,7 @@ def test_single_emitter_accuracy(loc_model,
 
     local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
     temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
-    assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+    # assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
     if local_context or temporal_attn:
         attn_length = loc_model.attn_length
 

@@ -264,56 +264,14 @@ class DeepSTORM3D(ailoc.common.XXLoc):
 
         return pred_volume
 
-    # def post_process(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, return_infer_map=False):
-    #     """
-    #     Postprocess a batch of inference output map, output is GMM maps and molecule array
-    #     [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty, z uncertainty,
-    #     photon uncertainty, x_offset, y_offset].
-    #     """
-    #
-    #     # # old version, slower
-    #     # inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
-    #     #                   'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': []}
-    #     #
-    #     # inference_dict['prob'].append(ailoc.common.cpu(p_pred))
-    #     # inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
-    #     # inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
-    #     # inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
-    #     # inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
-    #     # inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
-    #     # inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
-    #     # inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
-    #     # inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
-    #     # inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
-    #     #
-    #     # for k in inference_dict.keys():
-    #     #     inference_dict[k] = np.vstack(inference_dict[k])
-    #     #
-    #     # inference_dict['prob_sampled'] = None
-    #     # inference_dict['bg_sampled'] = None
-    #     #
-    #     # molecule_array, inference_dict = ailoc.common.gmm_to_localizations_old(inference_dict=inference_dict,
-    #     #                                                                    thre_integrated=0.7,
-    #     #                                                                    pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
-    #     #                                                                    z_scale=self.data_simulator.mol_sampler.z_scale,
-    #     #                                                                    photon_scale=self.data_simulator.mol_sampler.photon_scale,
-    #     #                                                                    bg_scale=self.data_simulator.mol_sampler.bg_scale,
-    #     #                                                                    batch_size=p_pred.shape[0])
-    #
-    #     # new version, faster
-    #     molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
-    #                                                                        xyzph_pred=xyzph_pred,
-    #                                                                        xyzph_sig_pred=xyzph_sig_pred,
-    #                                                                        bg_pred=bg_pred,
-    #                                                                        thre_integrated=0.7,
-    #                                                                        pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
-    #                                                                        z_scale=self.data_simulator.mol_sampler.z_scale,
-    #                                                                        photon_scale=self.data_simulator.mol_sampler.photon_scale,
-    #                                                                        bg_scale=self.data_simulator.mol_sampler.bg_scale,
-    #                                                                        batch_size=p_pred.shape[0],
-    #                                                                        return_infer_map=return_infer_map)
-    #
-    #     return molecule_array, inference_dict
+    def post_process(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, return_infer_map=False):
+        """
+        Postprocess a batch of inference output map, output is GMM maps and molecule array
+        [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty, z uncertainty,
+        photon uncertainty, x_offset, y_offset].
+        """
+
+        raise NotImplementedError('DeepSTORM3D uses its own analyze function for postprocessing!')
 
     def determine_post_process_param(self, batch_size):
         """

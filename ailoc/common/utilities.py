@@ -209,7 +209,7 @@ def get_gain_bg_empirical(images,
         (float, float, any): (bg_min, bg_max) background parameters
     """
     n, h, w = images.shape
-    batch_size = 1000  # A good default for many systems, adjust if needed
+    batch_size = max((1000 * 256 ** 2) // (h * w), 1)  # A good default for many systems, adjust if needed
 
     camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
 
@@ -257,7 +257,13 @@ def get_gain_bg_empirical(images,
 
         pix_mean = np.concatenate(pix_mean_list)
         pix_var = np.concatenate(pix_var_list)
-        pix_gain = ((pix_var - camera_calib.read_noise_sigma ** 2) / pix_mean)
+
+        if isinstance(camera_calib, ailoc.simulation.EMCCD):
+            enf_sq = 2.0
+            rn_var_input = (camera_calib.read_noise_sigma / camera_calib.em_gain) ** 2
+            pix_gain = (pix_var - rn_var_input) / (enf_sq * pix_mean)
+        else:  # sCMOS or other cameras
+            pix_gain = ((pix_var - camera_calib.read_noise_sigma ** 2) / pix_mean)
 
         used_idx = np.logical_and(pix_gain > pix_gain.mean() - 2 * pix_gain.std(),
                                   pix_gain < pix_gain.mean() + 2 * pix_gain.std())
@@ -265,7 +271,7 @@ def get_gain_bg_empirical(images,
 
         print(f'The variance/mean ratio of data is estimated as {est_gain:.2f} using the provided QE and e_per_adu.')
 
-        if est_gain > 1.1 or est_gain < 0.9:
+        if est_gain > 1.1 or (est_gain < 0.9 and est_gain > 0):
             pix_mean_used = pix_mean[used_idx]
             pix_var_used = pix_var[used_idx]
             e_per_adu_new = ((pix_mean_used.mean() +
@@ -300,8 +306,9 @@ def get_gain_bg_empirical(images,
 
     # Fit the Gauss distribution
     result = scipy.stats.norm.fit(pixel_vals)
-    bg_range = tuple(float(x) for x in np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
-                                               a_min=0, a_max=None))
+    bg_max = max(result[0], 20.0)  # ensure at least 20
+    bg_min = max(min(bg_max - np.clip(3 * result[1], 20.0, 300.0), bg_max / 2), 0.0)  # ensure at least 0
+    bg_range = (float(bg_min), float(bg_max))
     print(f'Estimated bg_range: {bg_range}')
 
     # --- Step 4: Plotting (if required) ---

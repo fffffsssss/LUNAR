@@ -223,6 +223,103 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     return metric_dict, paired_array
 
 
+def pair_localizations_with_offset(prediction,
+                                   ground_truth,
+                                   frame_num=None,
+                                   fov_xy_nm=None,
+                                   border=450,
+                                   tolerance_xy=250,
+                                   tolerance_z=500,
+                                   apply_z=True,
+                                   max_iter=20,
+                                   tol_offset=1.0,
+                                   tol_change=0.25,
+                                   print_info=False):
+    """
+    Iteratively compensate systematic (dx, dy, dz) offsets using median residuals (robust to outliers).
+
+    Stops when:
+      1) residual median-offset magnitude < tol_offset (nm), or
+      2) change in successive median-offsets < tol_change (nm), or
+      3) max_iter reached.
+
+    Returns:
+        final_metric (dict), paired_final (np.ndarray)
+    """
+    import copy
+    corrected = copy.deepcopy(prediction)
+    prev_offsets = None
+
+    for k in range(max_iter):
+        metric_k, paired_k = pair_localizations(prediction=corrected,
+                                                ground_truth=ground_truth,
+                                                frame_num=frame_num,
+                                                fov_xy_nm=fov_xy_nm,
+                                                border=border,
+                                                tolerance_xy=tolerance_xy,
+                                                tolerance_z=tolerance_z,
+                                                print_info=print_info)
+
+        if paired_k is None or len(paired_k) == 0:
+            # nothing to refine
+            break
+
+        # residuals: pred - gt
+        rx = paired_k[:, 5] - paired_k[:, 1]
+        ry = paired_k[:, 6] - paired_k[:, 2]
+        rz = paired_k[:, 7] - paired_k[:, 3] if apply_z else None
+
+        # robust (median) offsets
+        dx = float(np.median(rx))
+        dy = float(np.median(ry))
+        dz = float(np.median(rz)) if apply_z else 0.0
+        offsets_k = {'dx': dx, 'dy': dy, 'dz': dz}
+
+        # optional robust spread (MAD) for logging
+        madx = 1.4826 * float(np.median(np.abs(rx - dx))) if rx.size else np.nan
+        mady = 1.4826 * float(np.median(np.abs(ry - dy))) if ry.size else np.nan
+        madz = 1.4826 * float(np.median(np.abs(rz - dz))) if (apply_z and (rz is not None) and rz.size) else np.nan
+
+        # convergence checks based on medians
+        offset_mag = float(np.sqrt(dx * dx + dy * dy + (dz * dz if apply_z else 0.0)))
+        if prev_offsets is not None:
+            change_mag = float(np.sqrt((dx - prev_offsets['dx']) ** 2 +
+                                       (dy - prev_offsets['dy']) ** 2 +
+                                       ((dz - prev_offsets['dz']) ** 2 if apply_z else 0.0)))
+        else:
+            change_mag = np.inf
+
+        if print_info:
+            if apply_z:
+                print(f"[iter {k}] median offsets (nm): dx={dx:.3f}, dy={dy:.3f}, dz={dz:.3f} | |offset|={offset_mag:.3f} | Δ={change_mag if np.isfinite(change_mag) else float('inf'):.3f} | MAD (nm): x={madx:.3f}, y={mady:.3f}, z={madz:.3f}")
+            else:
+                print(f"[iter {k}] median offsets (nm): dx={dx:.3f}, dy={dy:.3f} | |offset|={offset_mag:.3f} | Δ={change_mag if np.isfinite(change_mag) else float('inf'):.3f} | MAD (nm): x={madx:.3f}, y={mady:.3f}")
+
+        if (offset_mag < tol_offset) or (np.isfinite(change_mag) and change_mag < tol_change):
+            break
+
+        # apply correction (subtract median offset)
+        arr = np.array(corrected, dtype=float)
+        arr[:, 1] -= dx
+        arr[:, 2] -= dy
+        if apply_z:
+            arr[:, 3] -= dz
+        corrected = arr.tolist()
+
+        prev_offsets = offsets_k
+
+    # final evaluation with corrected predictions
+    final_metric, paired_final = pair_localizations(prediction=corrected,
+                                                    ground_truth=ground_truth,
+                                                    frame_num=frame_num,
+                                                    fov_xy_nm=fov_xy_nm,
+                                                    border=border,
+                                                    tolerance_xy=tolerance_xy,
+                                                    tolerance_z=tolerance_z,
+                                                    print_info=print_info)
+    return final_metric, paired_final
+
+
 def find_molecules(molecule_array, frame_num):
     """
     Find molecules on specific frames.
@@ -293,23 +390,28 @@ def test_single_emitter_accuracy(loc_model,
         psf_model.focus_norm = psf_focus_norm
 
     # set emitter positions
-    x = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
-    y = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
+    x = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0] + xy_range[1]) / 2)  # unit nm
+    y = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0] + xy_range[1]) / 2)  # unit nm
     z = ailoc.common.gpu(torch.linspace(z_range[0], z_range[1], num_z_step))  # unit nm
-    photons = ailoc.common.gpu(torch.ones(num_z_step) * photon)*loc_model.data_simulator.camera.qe  # unit photons
+    photons = ailoc.common.gpu(torch.ones(num_z_step) * photon) * loc_model.data_simulator.camera.qe  # unit photons
     if isinstance(loc_model.data_simulator.camera, ailoc.simulation.SCMOS):
         bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
-                               loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
-    elif isinstance(loc_model.data_simulator.camera, ailoc.simulation.EMCCD):  # todo: EMCCD to be developed
-        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
-                               loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
+                               loc_model.data_simulator.camera.read_noise_sigma ** 2)  # unit photons
+    elif isinstance(loc_model.data_simulator.camera, ailoc.simulation.EMCCD):
+        # EMCCD Excess Noise Factor (ENF), the Gamma(x, 1/G) results in an ENF^2 of exactly 2.0
+        enf_sq = 2.0
+        photons = ailoc.common.gpu(torch.ones(num_z_step) * photon) * loc_model.data_simulator.camera.qe / enf_sq
+        rn_var_input = (
+                                   loc_model.data_simulator.camera.read_noise_sigma / loc_model.data_simulator.camera.em_gain) ** 2
+        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe / enf_sq + \
+                               rn_var_input / (enf_sq ** 2))
     else:
-        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe)   # unit photons
+        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe)  # unit photons
 
     if local_context or temporal_attn:
         # xyz_crlb, psfs = psf_model.compute_crlb_mf(x, y, z, photons, bgs, attn_length)
         xyz_crlb, psfs = psf_model.compute_crlb(x, y, z, photons, bgs)
-        xyz_crlb /= attn_length**0.5
+        xyz_crlb /= attn_length ** 0.5
     else:
         xyz_crlb, psfs = psf_model.compute_crlb(x, y, z, photons, bgs)
     xyz_crlb_np = ailoc.common.cpu(xyz_crlb)

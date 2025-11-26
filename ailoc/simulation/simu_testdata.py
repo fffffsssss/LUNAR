@@ -342,7 +342,8 @@ class TestDataSimulator:
 
         """add background"""
         if self.bg_perlin:
-            res = np.clip(image_size//64, a_min=1, a_max=None)
+            freq = 64
+            res = np.clip(image_size//freq, a_min=1, a_max=None)
             perlin_noise = ailoc.simulation.generate_perlin_noise_2d((image_size, image_size), (res, res))
             perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))
             bg = perlin_noise * (self.bg_range[1] - self.bg_range[0]) + self.bg_range[0]

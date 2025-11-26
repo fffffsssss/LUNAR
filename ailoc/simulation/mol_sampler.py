@@ -320,8 +320,9 @@ class MoleculeSampler:
         # random_flag = True
 
         if self.bg_perlin and random_flag:
+            freq = int(np.random.choice([32, 64]))  # randomly choose a frequency
             bg_s = np.zeros((times_sampled, self.train_size, self.train_size))
-            res = np.clip(self.train_size//64, a_min=1, a_max=None)
+            res = np.clip(self.train_size//freq, a_min=1, a_max=None)
             for i in range(times_sampled):
                 perlin_noise = ailoc.simulation.generate_perlin_noise_2d((self.train_size, self.train_size), (res, res))
                 perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))

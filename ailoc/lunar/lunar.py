@@ -1,4 +1,5 @@
 import warnings
+import deprecated
 import torch
 import numpy as np
 import time
@@ -530,7 +531,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         assert real_data is not None, 'real data is not provided'
 
-        self.prepare_sample_real_data(real_data, batch_size)
+        # self.prepare_sample_real_data(real_data, batch_size)
 
         # use a flag to early stop the physics learning if zernike coefficients are converged
         zernike_converged = False
@@ -633,6 +634,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         return loss.detach().cpu().numpy()
 
+    @deprecated.deprecated(reason="This function is deprecated, use physics_learning instead")
     def wake_train(self, real_data, batch_size, num_sample=50, max_recon_psfs=5000):
         """
         for each wake training iteration, using the current q network to localization enough signals, and then
@@ -792,12 +794,13 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 scale=(xyzph_sig_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)).sample()
             xyzph_sample[0] = torch.clamp(xyzph_sample[0], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
             xyzph_sample[1] = torch.clamp(xyzph_sample[1], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
-            xyzph_sample[2] = torch.clamp(xyzph_sample[2], min=-3.0, max=3.0)
+            xyzph_sample[2] = torch.clamp(xyzph_sample[2], min=-1.5, max=1.5)
             xyzph_sample[3] = torch.clamp(xyzph_sample[3], min=0.0, max=3.0)
             bg_sample = bg_pred.detach()
 
         return delta, xyzph_sample, bg_sample
 
+    @deprecated.deprecated('This function is deprecated')
     def prepare_sample_real_data(self, real_data, batch_size):
         self.sample_batch_size = self.context_size * batch_size
 
@@ -813,6 +816,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         self.w_sample_prob = real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)) / \
                              np.sum(real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)))
 
+    @deprecated.deprecated('This function is deprecated')
     def sample_real_data(self, real_data, n_img):
         n, h, w = real_data.shape
 
@@ -824,6 +828,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                      w_start: w_start + self.sample_window_size]
         return real_data_sample.astype(np.float32)
 
+    @deprecated.deprecated('This function is deprecated')
     def get_real_data_z_prior(self, real_data, batch_size):
         print('-' * 200)
         print(f'Using the current network to estimate the z prior of the real data {real_data.shape}...')
@@ -886,7 +891,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         self.network.train()
         self.real_data_z_weight = z_weight
 
-    @staticmethod
+    @deprecated.deprecated('This function is deprecated')
+    # @staticmethod
     def crop_patches(delta_map_sample,
                      real_data,
                      xyzph_map_sample,
@@ -1455,7 +1461,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                     (batch_size * self.dict_sampler_params['train_size'] ** 2) //
                                     (self.roi_lib['dense'].shape[-3] *
                                      self.roi_lib['dense'].shape[-1]
-                                     * self.roi_lib['dense'].shape[-2])
+                                     * self.roi_lib['dense'].shape[-2]) // 2  # in case the density is too high
                                     )
 
         real_data_sample_list = []
@@ -1517,6 +1523,10 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 num_psfs += len(delta_map_sample.nonzero())
 
         self.network.train()
+
+        # in case no emitters are detected using current network
+        if num_psfs == 0:
+            return np.nan
 
         real_data_sample_list = torch.cat(real_data_sample_list, dim=0)
         delta_map_sample_list = torch.cat(delta_map_sample_list, dim=0)

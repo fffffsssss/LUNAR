@@ -325,8 +325,6 @@ class VectorPSFTorch(VectorPSF):
             self.complex_type = torch.complex128
         elif data_type == torch.float32:
             self.complex_type = torch.complex64
-        elif data_type == torch.float16:
-            self.complex_type = torch.complex32
         else:
             raise ValueError(f'unsupported data type {data_type}')
         self._setup_device(device)
@@ -753,18 +751,20 @@ class VectorPSFTorch(VectorPSF):
 
         if self.focus_norm:
             # intensity normalization by focus
-            psfs_out /= self.norm_intensity
+            psfs_out /= self.norm_intensity.clamp_min(1e-12)
         else:
             # normalize by themselves
-            norm_factor = psfs_out.sum(dim=(-1, -2))
+            norm_factor = psfs_out.sum(dim=(-1, -2)).clamp_min(1e-12)
             psfs_out /= norm_factor[:, None, None]
 
         # otf rescale
-        if self.otf_rescale_xy[0] or self.otf_rescale_xy[1]:
+        if torch.any(self.otf_rescale_xy != 0):
             psfs_out = self.otf_rescale(psfdata=psfs_out, sigma_xy=self.otf_rescale_xy)
 
         # multiply with the photon number
         psfs_out *= photons[:, None, None]
+        if torch.isnan(psfs_out).any():
+            raise ValueError('nan in the psf output, something wrong in the simulation!')
 
         return psfs_out
 

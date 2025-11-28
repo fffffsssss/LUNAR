@@ -68,7 +68,7 @@ class Simulator:
         data_cam = self.camera.forward(data, curr_sub_fov_xy) \
             if isinstance(self.camera, ailoc.simulation.SCMOS) else self.camera.forward(data)
 
-        if robust_scale:
+        if robust_scale or isinstance(self.camera, ailoc.simulation.EMCCD):
             # random scale the data to break the strict Poisson distribution
             random_scale = torch.distributions.Uniform(0.5, 1.5).sample()
             data_cam = ((data_cam - self.camera.baseline) * random_scale + self.camera.baseline)

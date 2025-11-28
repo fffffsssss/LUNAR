@@ -239,7 +239,9 @@ def get_gain_bg_empirical(images,
 
         pix_mean_list = []
         pix_var_list = []
-
+        # divide these time traces (pixels) by time windows
+        batch_size = 200
+        num_batches = (n + batch_size - 1) // batch_size
         # Iterate over batches again to calculate statistics
         for i in range(num_batches):
             start_idx = i * batch_size
@@ -307,7 +309,8 @@ def get_gain_bg_empirical(images,
     # Fit the Gauss distribution
     result = scipy.stats.norm.fit(pixel_vals)
     bg_max = max(result[0], 20.0)  # ensure at least 20
-    bg_min = max(min(bg_max - np.clip(3 * result[1], 20.0, 300.0), bg_max / 2), 0.0)  # ensure at least 0
+    bg_r = np.clip(max(3 * result[1], bg_max / 2), 20.0, 200.0)  # ensure between 20 and 200
+    bg_min = max(bg_max - bg_r, 0.0)
     bg_range = (float(bg_min), float(bg_max))
     print(f'Estimated bg_range: {bg_range}')
 

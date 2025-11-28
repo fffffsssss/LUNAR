@@ -263,7 +263,7 @@ def get_gain_bg_empirical(images,
         if isinstance(camera_calib, ailoc.simulation.EMCCD):
             enf_sq = 2.0
             rn_var_input = (camera_calib.read_noise_sigma / camera_calib.em_gain) ** 2
-            pix_gain = (pix_var - rn_var_input) / (enf_sq * pix_mean)
+            pix_gain = (pix_var/enf_sq - rn_var_input) / pix_mean
         else:  # sCMOS or other cameras
             pix_gain = ((pix_var - camera_calib.read_noise_sigma ** 2) / pix_mean)
 

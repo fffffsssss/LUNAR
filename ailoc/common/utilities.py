@@ -308,10 +308,12 @@ def get_gain_bg_empirical(images,
 
     # Fit the Gauss distribution
     result = scipy.stats.norm.fit(pixel_vals)
-    bg_max = max(result[0], 20.0)  # ensure at least 20
-    bg_r = np.clip(max(3 * result[1], bg_max / 2), 20.0, 200.0)  # ensure between 20 and 200
-    bg_min = max(bg_max - bg_r, 0.0)
-    bg_range = (float(bg_min), float(bg_max))
+    bg_range = tuple(float(x) for x in np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
+                                               a_min=0, a_max=None))
+    # bg_max = max(result[0], 20.0)  # ensure at least 20
+    # bg_r = np.clip(max(3 * result[1], bg_max / 2), 20.0, 200.0)  # ensure between 20 and 200
+    # bg_min = max(bg_max - bg_r, 0.0)
+    # bg_range = (float(bg_min), float(bg_max))
     print(f'Estimated bg_range: {bg_range}')
 
     # --- Step 4: Plotting (if required) ---

@@ -2,7 +2,7 @@ import csv
 import random
 from operator import itemgetter
 import numpy as np
-import scipy.stats
+import scipy
 import torch
 from matplotlib import pyplot as plt
 import napari
@@ -292,6 +292,8 @@ def get_gain_bg_empirical(images,
     sample_mask = np.where(mean_image_photon > np.percentile(mean_image_photon, percentile))
 
     pixel_vals_list = []
+    batch_size = 200
+    num_batches = (n + batch_size - 1) // batch_size
     for i in range(num_batches):
         start_idx = i * batch_size
         end_idx = min(start_idx + batch_size, n)
